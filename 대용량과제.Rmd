@@ -1,0 +1,346 @@
+---
+title: "중간보고서"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# 주제: 데이터 시각화를 통한 야구 선수 연봉 협상 문제 해결
+
+## 사용 데이터
+1. 2020 빅콘테스트 퓨쳐스리그 야구 경기 데이터
+2. DACON KBO 시각화 대회 데이터
+3. 기상청 강수량 데이터
+
+## 주제선정이유
+1. 드라마나 기사 등에서 선수 - 구단 간 연봉 협상에서의 정보 비대칭이 존재함을 확인
+2. 실제 데이터를 통해서 이를 확인
+3. 2020 빅콘테스트에서 시각화가 부족하다는 평을 듣고 2등에 그쳤음
+
+
+# utils
+```{r}
+setwd('C:/')
+options(warn=-1)
+options(warn=-1)
+library(data.table)
+library(stringr)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+options("scipen" = 100)
+to_won=function(x){
+    if(str_detect(x,'만원')){
+        a=str_replace(x,'만원','') %>% as.numeric()*10000
+    }else{
+        x=str_replace(x,'엔','')
+        a=str_replace(x,'달러','') %>% as.numeric()*1200
+    }
+    return(a)
+}
+```
+# data load
+```{r}
+dir='C:/Users/kdh2/Desktop/project/data/datasets/raw_data'
+file_list=list.files(dir)
+data=data.frame()
+df_list=c()
+for (file in file_list){ 
+    temp=read.csv(paste(dir,file,sep='/'),header=TRUE,sep=',',stringsAsFactors = FALSE)
+    eval(parse(text=str_c(substr(file,24,nchar(file)-4),'=temp')))
+    df_list=df_list %>% append(substr(file,24,nchar(file)-4))
+}
+```
+# data integration & preprocessing
+## 데이터 년도별(2016~2020) 병합
+```{r}
+
+hitter_df=개인타자_2016
+
+for (i in df_list[2:5]){
+    eval(parse(text=str_c('hitter_df=rbind(hitter_df,',i,')')))
+}
+
+pitcher_df=개인투수_2016
+for (i in df_list[7:10]){
+    eval(parse(text=str_c('pitcher_df=rbind(pitcher_df,',i,')')))
+}
+
+match_df=경기_2016
+for (i in df_list[12:15]){
+    eval(parse(text=str_c('match_df=rbind(match_df,',i,')')))
+}
+player_df=등록선수_2016
+for (i in df_list[17:20]){
+    eval(parse(text=str_c('player_df=rbind(player_df,',i,')')))
+}
+profile_df=선수_2016
+for (i in df_list[22:25]){
+    eval(parse(text=str_c('profile_df=rbind(profile_df,',i,')')))
+}
+team_name_df=팀_2016
+team_hitter_df=팀타자_2016
+for (i in df_list[32:35]){
+    eval(parse(text=str_c('team_hitter_df=rbind(team_hitter_df,',i,')')))
+}
+team_pitcher_df=팀투수_2016
+for (i in df_list[37:40]){
+    eval(parse(text=str_c('team_pitcher_df=rbind(team_pitcher_df,',i,')')))
+}
+temp='hitter_df,pitcher_df,match_df,player_df,profile_df,team_name_df,team_hitter_df,team_pitcher_df'
+df_list2=str_split(temp,',')[[1]]
+df_list2
+```
+## 1. 팀 타자 데이터, 팀 투수 데이터 병합
+변수명이 겹치는 컬럼 존재
+```{r}
+
+colnames(team_hitter_df[colnames(team_hitter_df) %in% colnames(team_pitcher_df)])
+
+```
+유니크한 변수명으로 변경
+```{r}
+team_df=inner_join(x=team_hitter_df,y=team_pitcher_df,by=c('G_ID','GDAY_DS','T_ID','HEADER_NO','VS_T_ID'))
+team_df=inner_join(x=team_hitter_df,y=team_pitcher_df,by=c('G_ID','GDAY_DS','T_ID','HEADER_NO','VS_T_ID'))
+names(team_df)[names(team_df) %>% str_detect('\\.y')] <- names(team_df)[names(team_df) %>% str_detect('\\.y')] %>% str_replace('\\.y',"_pitcher")
+names(team_df)[names(team_df) %>% str_detect('\\.x')] <- names(team_df)[names(team_df) %>% str_detect('\\.x')] %>% str_replace('\\.x',"_hitter")
+```
+## 2. 팀타자,팀 투수, 개인 투수 데이터 병합
+```{r}
+
+team_df2=inner_join(x=team_df,y=hitter_df,by=c('G_ID','GDAY_DS','T_ID','HEADER_NO','VS_T_ID'))
+
+team_df2 %>% dim
+```
+마찬가지로 개인기록과 팀기록의 컬럼명이 겹쳐 문제 발생하여 전처리
+```{r}
+colnames(team_df[colnames(team_df) %in% colnames(hitter_df)])
+
+```
+```{r}
+names(team_df2)[names(team_df2) %>% str_detect('\\.y')] <- names(team_df2)[names(team_df2) %>% str_detect('\\.y')] %>% str_replace('\\.y',"_hitter_player")
+names(team_df2)[names(team_df2) %>% str_detect('\\.x')] <- names(team_df2)[names(team_df2) %>% str_detect('\\.x')] %>% str_replace('\\.x',"_team")
+```
+
+# 3. 팀타자,팀투수,개인타자 데이터 병합
+```{r}
+team_df3=inner_join(x=team_df,y=pitcher_df,by=c('G_ID','GDAY_DS','T_ID','HEADER_NO','VS_T_ID'))
+names(team_df3)[names(team_df3) %>% str_detect('\\.y')] <- names(team_df3)[names(team_df3) %>% str_detect('\\.y')] %>% str_replace('\\.y',"_pitcher_player")
+names(team_df3)[names(team_df3) %>% str_detect('\\.x')] <- names(team_df3)[names(team_df3) %>% str_detect('\\.x')] %>% str_replace('\\.x',"_team")
+```
+```{r}
+team_df3 %>% dim
+```
+# 4. 선수 연봉 데이터와 병합
+연도 변수 생성
+```{r}
+team_df2=team_df2 %>% mutate(GYEAR=str_sub(GDAY_DS,1,4 ) %>% as.numeric())
+team_df3=team_df3 %>% mutate(GYEAR=str_sub(GDAY_DS,1,4 ) %>% as.numeric())
+
+```
+병합을 통해 팀이름(ex) HH=>한화) 및 선수별 연봉 컬럼 추가
+```{r}
+profile_df=profile_df %>% rename('P_ID'='PCODE')
+team_df2=team_df2 %>% inner_join(profile_df,by=c('GYEAR','P_ID','T_ID'))  %>% inner_join(team_name_df,by='T_ID')
+team_df3=team_df3 %>% inner_join(profile_df,by=c('GYEAR','P_ID','T_ID')) %>% inner_join(team_name_df,by='T_ID')
+
+```
+# 5. 경기 데이터와 병합
+경기 요일 및 장소 테이블과 병합
+```{r}
+team_df3=team_df3 %>% inner_join(match_df,by=c('G_ID','GDAY_DS','HEADER_NO'))
+team_df2=team_df2 %>% inner_join(match_df,by=c('G_ID','GDAY_DS','HEADER_NO'))
+```
+
+
+# 6. 타자들의 키/체중/커리어 가 담겨있는 데이터 셋 구축
+```{r}
+batter_profile = read.csv("C:/Users/kdh2/Desktop/project/data/datasets/Regular_Season_Batter.csv", fileEncoding = "UTF-8", na.strings = c("","-"),stringsAsFactors=F)
+batter_profile = batter_profile %>% select(height.weight,batter_name,career,starting_salary) %>% rename('NAME'='batter_name')
+batter_with_profile=batter_profile %>% inner_join(team_df3,by=c('NAME'))
+```
+
+# 7. 날씨 데이터와 병합
+
+강수데이터 
+```{r}
+
+setwd('C:/Users/kdh2/Desktop/project/data/datasets/')
+rain_df=read.csv('경기장_강수_데이터.csv')
+rain_df %>% head()
+```
+
+문학: 인천/ 고척:서울/ 사직:서울/ 마산: 창원
+스타디움 별 지역 명을 매핑해주는 과정임
+```{r}
+region=data.table(STADIUM=c(team_df2$STADIUM %>% unique()),지점명=c('서울','창원','인천','서울','대구','광주','서울',
+                                                              '수원','대전','포항','울산','청주','창원'))
+rain_df=inner_join(rain_df,region,by='지점명')
+
+```
+
+강수는 선수 성과에 영향을 미치므로 이후 강수가 많았던 경기를 따로 확인할 용도로 병합
+```{r}
+rain_df=rain_df %>% mutate(GDAY_DS=as.numeric(str_replace_all(일시,'-',"")))
+
+team_df2=inner_join(team_df2,rain_df,by=c('GDAY_DS','STADIUM'))
+
+team_df3=inner_join(team_df2,rain_df,by=c('GDAY_DS','STADIUM'))
+```
+
+
+cold game 데이터 제거
+```{r}
+'%ni%' <- Negate('%in%')
+cold_list=c('20170702WOKT0','20170702SSSK0','20170702HTLG0','20190407HHLT0','20200610HTKT0')
+team_df3=team_df3 %>% subset(G_ID %ni% cold_list)
+team_df2=team_df2 %>% subset(G_ID %ni% cold_list)
+```
+
+# 연봉 정보 전처리
+
+```{r}
+team_df2$MONEY=sapply(team_df2$MONEY,to_won)
+
+```
+
+# EDA
+## 데이터별로 간단한 EDA 진행
+### 0. 팀별로 연봉 분포는 천차 만별임
+- 팀별로 연봉 산정 기준 또한 다를 것이라고 생각
+```{r}
+temp=team_df2 %>% group_by(T_NM,P_ID) %>% summarise(mean=mean(MONEY))
+ggplot(data=temp, aes(x=T_NM,y=mean,group=T_NM,fill=T_NM))+
+  geom_boxplot(outlier.shape=16, outlier.colour="red")+
+  ggtitle('boxplot of mean pay by teams')+
+  coord_cartesian(ylim = c(10000000, 200000000
+                           ))
+```
+
+###  0.OPS와 연봉은 선형 관계를 보일까?
+- 그다지 선형 관계를 보이지 않는다.
+- 이를 통해 실력과 연봉이 정비례 관계가 아닐 수 있음을 추측해볼 수 있다.
+```{r}
+ops_df=team_df2 %>% mutate(SLG=(HIT_hitter+HP_hitter+BB_hitter)/(AB_hitter+BB_hitter+HP_hitter+SF_hitter),
+                   OBA=(HIT_hitter+2*H2_hitter+3*H3_hitter+4*HR)/AB_hitter,
+                    W_OPS=0.57*SLG+0.43*OBA)
+ops_df2=ops_df %>% group_by(P_ID) %>% summarise(ops=mean(W_OPS)) %>% inner_join(profile_df,by='P_ID')
+
+ops_df2$MONEY=sapply(ops_df2$MONEY,to_won)
+ggplot(ops_df2, aes(x = ops, y =MONEY)) + geom_point()+facet_wrap(~T_ID,nrow=2)
+```
+
+### 1. 개인타자 데이터
+- 타자 선수 개인의 기록이 있는 테이블
+- 안타, 2루타, 3루타, 병살타 등 다양한 타자 지표가 있음
+
+```{r}
+hitter_df %>% head(3)
+
+```
+
+팀 내 선수 평균 안타~홈런 타율
+```{r}
+library(data.table)
+#팀 내 선수 평균 안타~홈런 타율
+avg_hit=hitter_df %>% group_by(T_ID) %>% summarise(avg_HR=mean(HR),avg_HIT=mean(HIT),
+                                          avg_H2=mean(H2),avg_H3=mean(H3))
+avg_hit %>% reshape2::melt(id='T_ID') %>% ggplot(aes(x=T_ID, y=value,fill=variable))+geom_bar(stat="identity",position ='dodge')+scale_fill_brewer(palette="Pastel1") 
+    
+    
+```
+
+어떤 한 선수의 득점권 타율 lineplot
+```{r}
+hitter_df %>% filter(ymd(GDAY_DS)>ymd('20200401')) %>% group_by(GDAY_DS)  %>% summarise(mean=mean(P_HIT_CN))  %>% mutate('득점권타율'=as.numeric(mean),GDAY_DS=ymd(GDAY_DS)) %>% ggplot()+geom_line(aes(GDAY_DS,득점권타율)) +ggtitle('2020 어떤 선수의 득점권타율') 
+
+```
+
+### 2. 개인 투수 데이터
+- 투수 선수 개인의 기록이 있는 테이블
+- 구원투수 여부, 삼진 여부, 완투 여부 등 다양한 투수 지표가 있음.
+```{r}
+pitcher_df %>% head(3)
+
+```
+
+한 선수의 월별 평균 투구 수
+```{r}
+pitcher_df %>% filter(P_ID == 60146) %>% mutate(month=month(ymd(GDAY_DS))) %>% group_by(month) %>% summarise(total투구수=sum(BF)) %>% ggplot(aes(x=month, y=total투구수,fill=month))+
+geom_bar(stat='identity')+ggtitle('한 선수의 월별 평균 투구 수')
+```
+
+### 3. 팀 타자 데이터
+- 팀 단위에서 기록된 타자 기록 데이터
+- 여러가지 팀 단위 분석이 가능함.
+
+팀 타수 대비 안타 비율
+```{r}
+
+team_hitter_df=team_hitter_df %>% mutate(HIT2=(HIT+H2+H3+HR)/AB)
+ggplot(team_hitter_df, aes(x=HIT2, y=P_HRA_RT)) + geom_point() + stat_smooth()
+```
+
+### 4. 팀 투수 데이터
+- 팀 단위에서 기록된 투수 기록 데이터
+- 여러가지 팀 단위 분석이 가능함.
+
+팀별 득점권WHIP와 2점차 이하 WHIP의 scatter plot
+```{r}
+ggplot(team_pitcher_df, aes(x=P_WHIP_RT, y=P2_WHIP_RT)) + geom_point() + stat_smooth()+
+facet_wrap(~T_ID,nrow=3)
+
+```
+
+### 5. 선수 연봉 및 나이 데이터
+- 선수 개인의 연봉, 나이, 포지션 등의 정보를 담고 있는 테이블
+```{r}
+profile_df$MONEY=sapply(profile_df$MONEY,to_won)
+profile_df %>% head()
+```
+
+팀별 평균 연봉
+```{r}
+profile_df %>% group_by(T_ID) %>% summarise(avg_salary=mean(MONEY)) %>% ggplot(aes(x=T_ID,y=avg_salary,fill=T_ID))+geom_bar(stat='identity')
+```
+
+### 6. 경기 지역 및 요일 데이터
+- 경기의 요일 및 지역을 나타낸 데이터
+```{r}
+match_df %>% head()
+```
+
+전체 시즌 대상 지역별 경기 수
+```{r}
+match_df %>% group_by(STADIUM) %>% summarise(경기횟수=n()) %>% ggplot(aes(x=STADIUM,y=경기횟수,fill=STADIUM))+geom_bar(stat='identity')
+```
+
+### 7. 타자 커리어 및 시작 연봉 데이터
+- 선수들의 출신 고교 및 대학 뿐만 아니라, 선수 입단 당시의 시작 연봉을 알 수 있는 테이블
+```{r}
+batter_profile=batter_profile %>% na.omit() 
+batter_profile$starting_salary=sapply(batter_profile$starting_salary,to_won) 
+batter_profile %>% head()
+```
+
+타자들의 시작 연봉 히스토그램
+```{r}
+batter_profile %>% na.omit() %>% mutate(starting_salary=as.numeric(starting_salary)) %>% ggplot(aes(starting_salary))+geom_histogram(stat='count')
+```
+
+성균관대를 거친 야구선수
+```{r}
+batter_profile %>% mutate(a=str_detect(career,'성균')) %>% filter(a==TRUE) %>% group_by(NAME) %>% select(NAME) %>% unique()
+```
+
+### 8. 날씨 데이터
+- 경기가 이루어졌던 지역의 강수량을 담고 있는 테이블
+- 정확한 선수 성과 측정을 위해서 강수가 많았던 날의 경기는 제거하는 등의 전처리를 위한 테이블
+
+지역별 평균 강수량
+```{r}
+rain_df %>% group_by(지점명) %>% summarise(rain=mean(일강수량.mm.)) %>% ggplot(aes(x=지점명,y=rain,fill=지점명))+geom_bar(stat='identity')
+
+```
+
