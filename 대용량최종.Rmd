@@ -1,0 +1,511 @@
+---
+title: "최종보고서"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# 주제: 데이터 시각화를 통한 야구 선수 연봉 협상 문제 해결
+
+## 사용 데이터
+1. 2020 빅콘테스트 퓨쳐스리그 야구 경기 데이터
+2. DACON KBO 시각화 대회 데이터
+3. 기상청 강수량 데이터
+
+## 주제선정이유
+1. 드라마나 기사 등에서 선수 - 구단 간 연봉 협상에서의 정보 비대칭이 존재함을 확인
+2. 실제 데이터를 통해서 이를 확인
+3. 2020 빅콘테스트에서 시각화가 부족하다는 평을 듣고 2등에 그쳤음
+
+
+# utils & Data Load
+```{r cars}
+options(warn=-1)
+library(data.table)
+library(stringr)
+library(dplyr)
+library(ggplot2)
+dir='C:/Users/kdh2/Desktop/project/data/datasets/raw_data'
+file_list=list.files(dir)
+data=data.frame()
+df_list=c()
+for (file in file_list){ 
+  temp=read.csv(paste(dir,file,sep='/'),header=TRUE,sep=',',stringsAsFactors = FALSE)
+  eval(parse(text=str_c(substr(file,24,nchar(file)-4),'=temp')))
+  df_list=df_list %>% append(substr(file,24,nchar(file)-4))
+}
+hitter_df=개인타자_2016
+for (i in df_list[2:5]){
+    eval(parse(text=str_c('hitter_df=rbind(hitter_df,',i,')')))
+}
+
+
+pitcher_df=개인투수_2016
+for (i in df_list[7:10]){
+    eval(parse(text=str_c('pitcher_df=rbind(pitcher_df,',i,')')))
+}
+
+
+
+
+match_df=경기_2016
+for (i in df_list[12:15]){
+    eval(parse(text=str_c('match_df=rbind(match_df,',i,')')))
+}
+
+
+player_df=등록선수_2016
+for (i in df_list[17:20]){
+    eval(parse(text=str_c('player_df=rbind(player_df,',i,')')))
+}
+
+profile_df=선수_2016
+for (i in df_list[22:25]){
+    eval(parse(text=str_c('profile_df=rbind(profile_df,',i,')')))
+}
+
+
+team_hitter_df=팀타자_2016
+for (i in df_list[32:35]){
+    eval(parse(text=str_c('team_hitter_df=rbind(team_hitter_df,',i,')')))
+}
+
+
+team_pitcher_df=팀투수_2016
+for (i in df_list[37:40]){
+    eval(parse(text=str_c('team_pitcher_df=rbind(team_pitcher_df,',i,')')))
+}
+
+
+temp='hitter_df,pitcher_df,match_df,player_df,profile_df,team_name_df,team_hitter_df,team_pitcher_df'
+df_list2=str_split(temp,',')[[1]]
+
+
+profile_df=profile_df %>% rename('P_ID'='PCODE')
+```
+
+## 데이터 전처리
+
+연봉 정보 전처리
+- '만원' 또는 '달러' 각각 단위가 달라서 다르게 처리
+```{r}
+
+to_won=function(x){
+    if(str_detect(x,'만원')){
+        a=str_replace(x,'만원','') %>% as.numeric()*10000
+    }else{
+        x=str_replace(x,'엔','')
+        a=str_replace(x,'달러','') %>% as.numeric()*1200
+    }
+    return(a)
+}
+
+setwd('C:/Users/kdh2/Desktop/project/data/datasets')
+profile_df$MONEY=sapply(profile_df$MONEY,to_won)
+
+
+```
+
+강수량 100 이상인 날에 치뤄진 경기 제거
+```{r}
+setwd('C:/Users/kdh2/Desktop/project/data/datasets')
+'%ni%' <- Negate('%in%')
+rain_df=read.csv('경기장_강수_데이터.csv')
+rain_df %>% head()
+rain_df=rain_df %>% mutate(GDAY_DS=as.numeric(str_replace_all(일시,'-',"")))
+rain_df2=rain_df %>% filter(일강수량.mm.>100)
+hitter_df=hitter_df %>% subset(GDAY_DS %ni% rain_df2$GDAY_DS)
+```
+
+### 사전 조사를 통해 콜드게임 경기 제거
+```{r}
+
+cold_list=c('20170702WOKT0','20170702SSSK0','20170702HTLG0','20190407HHLT0','20200610HTKT0')
+hitter_df=hitter_df %>% subset(G_ID %ni% cold_list)
+pitcher_df=pitcher_df %>% subset(G_ID %ni% cold_list)
+```
+타자 정보를 년도별로 병합
+```{r}
+hitter_df=hitter_df %>% mutate(GYEAR=as.integer(substring(GDAY_DS,0,4)))
+hitter_df=hitter_df %>% inner_join(profile_df,by=c('P_ID','T_ID','GYEAR'))
+```
+가독성을 위해 약어를 한국어로 변경
+```{r}
+names(hitter_df)<-c('게임키','게임날짜','팀','상대팀','더블헤더','초말','선수코드','선발여부','타순','타자','타수',
+                '타점','득점','안타','이루타','삼루타','홈런','도루','도루실패','희타','희비','볼넷','고의4구','사구',
+                   '삼진','병살타','실책','잔루','득점권타율','득점권타수','득점권안타','등록년도','이름','포지션','나이',
+                   '연봉')
+```
+
+투수 데이터 또한 한국어 변수명으로 변경
+```{r}
+pitcher_df=pitcher_df %>% mutate(GYEAR=as.integer(substring(GDAY_DS,0,4)))#투수 타자 잠시 병합
+pitcher_df=pitcher_df %>% inner_join(profile_df,by=c('P_ID','T_ID','GYEAR'))
+names(pitcher_df)<-c('게임키','게임날짜','팀','상대팀','더블헤더','초말','선수코드','선발','구원','완투',
+                    '종료','결과','홀드','이닝','투구수','상대타자숫자','상대타자타수','안타','이루타','삼루타',
+                    '홈런','도루','도루실패','희타','희비','볼넷','고의사구','사구','삼진','병살타',
+                    '폭투','보크','실책','총실점','자책점','득점권WHIP','이점차이하WHIP','삼사오번타자WHIP',
+                   '등록년도','이름','포지션','나이','연봉')
+pitcher_df=pitcher_df %>% mutate(투수타자='투수')
+```
+
+# EDA
+- "의미있는"시각화를 하기 위해 가설을 세우고 시각화를 통해 확인하였습니다
+
+
+## 가설1. 나이가 높을 수록 연봉이 높을까?
+### 현재로써 연봉에 가장 유의한 영향을 끼치는 변수는 무엇일까?
+  - 선형 관계만 살펴보았을 때, 홈런 등의 타격지표 등은 납득이 가는 지표였습니다.
+  - 하지만 "나이"와 "연봉"간의 선형관계가 있음이 의아해서, 이를 구체적으로 시각화 해보았습니다.
+```{r}
+hitter_df=hitter_df %>% mutate(투수타자='타자')
+
+all_numVar=hitter_df %>% select(names(which(sapply(hitter_df, is.numeric)))) %>% select(-c(타수,게임날짜,등록년도))
+all_numVar=all_numVar %>% group_by(선수코드) %>% summarise_each(mean)
+all_numVar=all_numVar %>% select(-c(선수코드))
+library(corrplot)
+cor_numVar <- cor(all_numVar, use="pairwise.complete.obs")
+cor_sorted <- as.matrix(sort(cor_numVar[,'연봉'], decreasing = TRUE))
+CorHigh <- names(which(apply(cor_sorted, 1, function(x) abs(x)>0.40)))
+cor_numVar <- cor_numVar[CorHigh, CorHigh]
+corrplot.mixed(cor_numVar, tl.col="black", tl.pos = "lt")
+```
+
+타자의 실력 지표인 OPS 추가
+```{r}
+hitter_df=hitter_df %>% mutate(SLG=(안타+사구+볼넷)/(타수+볼넷+사구+희비),
+                   OBA=(안타+2*이루타+3*삼루타+4*홈런)/타수,
+                    W_OPS=0.57*SLG+0.43*OBA)
+```
+
+
+```{r}
+age_money=rbind(pitcher_df %>% group_by(선수코드,나이) %>% summarise(temp=mean(연봉)) %>% mutate(투수타자='투수'),
+      hitter_df %>% group_by(선수코드,나이) %>% summarise(temp=mean(연봉)) %>% mutate(투수타자='타자'))
+```
+
+
+```{r}
+age_money=age_money %>% mutate( 나이대=ifelse(나이<30 & 나이>=20,'20대',ifelse(나이<40 & 나이>=30,'30대',ifelse(나이>40 & 나이<50,'40대','그외'))))
+
+```
+
+- 타자의 경우 나이가 증가할 수록 평균적인 연봉이 나이대별로 2억정도 씩 차이가 납니다.
+- 투수의 경우 20대와 30대 간의 연봉 격차는 심하지만, 30대와 40대 간의 연봉 격차는 그리 심하지는 않았습니다.
+- 이 나이대에 따른 연봉 격차가 불합리한 것인지 확인하고자, 두 번째 가설을 세웠습니다.
+```{r}
+age_money=age_money %>% na.omit()
+age_money2=age_money %>% group_by(투수타자,나이대) %>% summarise(평균연봉=mean(temp))
+age_money2=age_money2 %>% mutate(평균연봉2=floor(평균연봉 /10000))
+age_money2 %>% ggplot(aes(x=나이대,y=평균연봉2,fill=투수타자))+
+    geom_bar(stat='identity',position='dodge') +
+   scale_fill_brewer(palette='Pastel1')+
+    theme(legend.position=c(0.8,0.8)
+         ,legend.justification=c(1,1),
+         legend.background=element_blank(),
+          panel.grid.major.x=element_blank(),
+          
+         )+
+          scale_y_continuous(name='평균연봉')  +
+       annotate('text',x=3.5,y=37000,label='(단위: 만원)',color='darkgray')+
+    geom_text(aes(label=평균연봉2),size=4, position = position_dodge(width=0.9))
+```
+
+## 가설2. 선수들의 "커리어 하이"는 언제일까?
+```{r}
+hitter_df=hitter_df %>% mutate(SLG=(안타+사구+볼넷)/(타수+볼넷+사구+희비),
+                   OBA=(안타+2*이루타+3*삼루타+4*홈런)/타수,
+                    OPS=SLG+OBA)
+hitter_df$W_OPS <- ifelse(is.na(hitter_df$W_OPS), 0,hitter_df$W_OPS)
+
+hitter_df=hitter_df%>% na.omit()
+```
+
+- 타자의 실력지표라고 할 수 있는 OPS의 나이별 평균을 확인해보았습니다.
+- 실제로 확인해본 결과, 30대 및 40대에서 커리어 하이를 찍는다는 사실을 알 수 있었습니다.
+- 이는 앞서 확인했던 나이와 연봉 간의 관계가 유의함을 뒷받침합니다.
+```{r}
+hitter_df2=hitter_df %>% group_by(선수코드) %>% summarise(타수=sum(타수),나이=first(나이),OPS2=mean(OPS))
+ggplot(hitter_df2 %>% filter(타수>=30) %>% group_by(나이) %>% summarise(mean_OPS = mean(OPS2), median_OPS = median(OPS2)))+
+   geom_line(aes(x = 나이, y = mean_OPS),color = "#00AFBB", size = 0.5, show.legend = TRUE,linetype='dashed')+
+ ggtitle("나이별 평균 OPS")+
+   geom_point(aes(x = 나이, y = mean_OPS),color = "#00AFBB", size = 3, show.legend = TRUE,shape=22)+
+ theme(text = element_text(size = 12, family = "NanumBarunGothicBold"), panel.grid.minor.x = element_blank())
+```
+
+## 가설 3. 병살타는 실수일까? 실력일까?
+- 연봉 협상 과정에서, 어떤 변수를 실력 지표로 보고, 어떤 지표를 운에 의한 지표로 볼 지는 중요한 문제입니다.
+- 야구 도메인 지식이 부족한 저에게 있어, 병살타는 상대 투수 수비 능력, 현재 루의 상황 등 여러 운에 의한 것이 많이 
+작용할 것이라고 생각했습니다.
+- 이에 따라 Plot을 통해 병살타에 대해서 살펴보고자 하였습니다.
+- 뚜렷한 선형관계가 없음을 보니, 실력지표라고 하기 어렵다는 결론을 낼 수 있었습니다.
+```{r}
+hitter_df4=hitter_df %>% group_by(선수코드,나이) %>% summarise(타수=sum(타자),평균병살타=mean(병살타),평균OPS=mean(W_OPS))
+
+p1=hitter_df4 %>% filter(타수>=30) %>% ggplot(aes(x=평균병살타,y=평균OPS))+
+    geom_point(alpha=0.3) 
+  # scale_color_brewer(palette = 'Set1')
+#     size_range=range(hitter_df$타수)
+
+p2=hitter_df4 %>% filter(타수>=30) %>% ggplot(aes(x=평균병살타,y=평균OPS))+stat_bin_hex(bins=30)+
+scale_fill_gradient(low='lightblue',high='darkgray',limits=c(0.1,1.5))
+
+
+
+library(gridExtra)
+grid.arrange(p1,p2,nrow=1)
+
+
+```
+
+## 가설 4. 요일/월에 따라 선수 실력에 차이가 있을까??
+- 선수 성과를 평가하는 데에 있어서, "평균적인" 실력을 나타내는 경기를 통해 확인할 수 있으면 좋을 것이라고 생각했습니다.
+- 갖고 있는 배경지식 상으로, 국내 야구 순위는 7월과 8월에 정해집니다. 그렇다면, 순위가 정해지는 시즌에 선수들의 진짜 실력이
+나타나진 않을까 궁금하였습니다.
+
+```{r}
+library(lubridate)
+week_team=hitter_df %>% na.omit %>%  mutate(month=month(ymd(게임날짜),label=TRUE),weekday=wday(ymd(게임날짜),label=TRUE)) %>%
+group_by(팀,weekday) %>% summarise(OPS=mean(W_OPS))
+p1=week_team %>% ggplot(aes(x=weekday,y=OPS,color=팀,group=팀)) + geom_line()+facet_wrap(팀~.,nrow=4)+
+ggtitle("팀별 주간 OPS 흐름")+theme(
+    panel.grid.minor.y = element_blank(),
+panel.grid.major.y = element_blank(),
+,legend.position='top',
+legend.background=element_rect(fill="white",color='black'),
+legend.key=element_blank(),
+legend.key.width = unit(0.3, 'cm'))
+#전체 평균 트렌드
+temp=week_team %>% group_by(weekday) %>% summarise(mean_OPS=mean(OPS),min_OPS=min(OPS),max_OPS=max(OPS))
+p2=temp %>% ggplot(aes(x=weekday,y=mean_OPS,group=1)) +
+geom_ribbon(aes(ymin=temp$min_OPS, ymax=temp$max_OPS), linetype=2, alpha=0.1,color='grey50')+
+            geom_line(color='red')+ggtitle("전체 선수 주간 OPS 흐름")
+
+```
+
+- 놀랍게도, 비록 팀별 변동이 다소 있지만 대부분의 팀 선수들을 보았을 때 그리고 전체 선수를 기준으로 보았을 때 모두 "월요일"에는 평균적인 OPS가 낮은 것을 확인할 수 있었습니다.
+- 따라서, 선수 연봉 협상에 있어서 월요일을 제외한 경기의 데이터를 통해 협상을 진행할 수 있을 것입니다.
+- 혹은, 월요일에 지나치게 성적이 떨어지는 선수를 확인하여 "실력의 변동성이 크다"라고 정의할 수도 있을 것입니다.
+```{r}
+grid.arrange(p1,p2,nrow=1)
+```
+
+- 이번에는 "월"마다 선수들의 성과에 차이가 있는지 확인해보았습니다.
+- 갖고 있는 배경지식처럼, 순위가 결정 되는 7월 및 8월에 평균적인 OPS가 증가하는 것을 확인할 수 있었습니다.
+- 이를 통하여, "평균적인 OPS가 낮지만, 순위가 결정되는 7월 및 8월에 OPS가 높은 선수"의 연봉이 높게 책정 될 수 있을 것입니다.
+
+```{r}
+month_team=hitter_df %>% na.omit %>%  mutate(month=month(ymd(게임날짜),label=TRUE),weekday=wday(ymd(게임날짜),label=TRUE)) %>%
+group_by(팀,month) %>% summarise(OPS=mean(W_OPS)) 
+p3=month_team %>% ggplot(aes(x=month,y=OPS,color=팀,group=팀)) + geom_line()+facet_wrap(팀~.,nrow=4)+
+ggtitle("팀별 년간 OPS 흐름")+theme(
+    panel.grid.minor.y = element_blank(),
+panel.grid.major.y = element_blank(),
+,legend.position='top',legend.key.width = unit(0.3, 'cm'),
+legend.background=element_rect(fill="white",color='black'),
+legend.key=element_blank())
+
+temp=month_team %>% group_by(month) %>% summarise(mean_OPS=mean(OPS),min_OPS=min(OPS),max_OPS=max(OPS))
+p4=temp %>% ggplot(aes(x=month,y=mean_OPS,group=1)) +
+geom_ribbon(aes(ymin=temp$min_OPS, ymax=temp$max_OPS), linetype=2, alpha=0.1,color='grey50')+
+            geom_line(color='red')
+
+grid.arrange(p3,p4,nrow=1)
+
+```
+
+타자능력뿐만 아니라, 주루능력 및 수비 능력을 체크할 수 있는 세이버메트릭스 지표들을 추가하였습니다.
+```{r}
+hitter_df2=hitter_df %>% select(선수코드,names(which(sapply(hitter_df, is.numeric)))) %>% select(-c(게임날짜,등록년도)) %>% 
+group_by(선수코드) %>% na.omit() %>% summarise_all(sum)
+
+names(hitter_df2)
+hitter_df2=hitter_df2 %>% mutate(wOBA=(0.69*볼넷+0.72*사구+0.89*안타+1.27*이루타+1.62*삼루타+2.10*홈런)/(타수+볼넷+고의4구+희비)) %>% mutate(wOBA= ifelse(is.na(wOBA),0,wOBA))
+
+league_wOBA_mean=hitter_df2 %>% na.omit() %>% summarise(mean(wOBA))
+
+wOBA_scale=.320
+
+league_wOBA_mean=league_wOBA_mean[[1]]
+hitter_df2=hitter_df2 %>% mutate( wRAA=타수*((wOBA-league_wOBA_mean)/.320))
+temp=hitter_df2 %>% summarise(mean(도루실패))
+mean_SB=temp[[1]]
+mean_wSB=hitter_df2 %>% mutate(wSB =0.2*도루 - 0.4*도루실패) %>% summarise(mean(wSB))
+mean_wSB=mean_wSB[[1]]
+hitter_df2=hitter_df2 %>% mutate(wSB =0.2*도루 - 0.4*도루실패-mean_wSB)
+profile_df2=profile_df %>% group_by(P_ID) %>% summarise(포지션=first(POSITION))
+hitter_df2=inner_join(hitter_df2,profile_df2  %>% rename('선수코드'='P_ID'))
+hitter_df2$포지션 %>% unique()
+position_scale=function(x){ #포수에 가중치 주기위한 함수
+    if(x=='내'){
+        a=0.2
+    }else{
+        if(x=='포'){
+            a=1
+        }else{
+            a=0
+        }
+    }
+    return(a)
+}
+hitter_df2$포지션가중치=hitter_df2$포지션 %>% sapply(position_scale)
+```
+
+# 가설5. 실제 타율이 높은데 득점권 타율은 낮은 사람과 실제 타율은 낮은데 득점권 타율은 높은사람 간의 연봉 차이가 존재할까?
+- 즉, 득점에 주요한 영향을 미치는 선수들은 오히려 연봉이 "과소평가" 되어있을 수 있기에, 연봉  협상 과정에서 실타율과 득점권 타율을 함께 확인해야할 것입니다. 
+```{r}
+temp=hitter_df %>% group_by(선수코드,등록년도) %>% na.omit() %>% summarise(OPS=mean(W_OPS),득점권타율=mean(득점권타율),연봉=mean(연봉)) %>% 
+mutate(gap=OPS-득점권타율) 
+
+
+temp2=temp %>% filter(gap<0.1538)
+temp3=temp %>% filter(gap>0.2443)
+
+a=temp2$연봉 %>% mean()
+b=temp3$연봉 %>% mean()
+df <- data.frame(Name=c("실타율 낮고 득점타율 높음","실타율 높고 득점타율 낮음"),Amount=c(a,b))
+df %>% ggplot(aes(x=factor(Name), y=Amount/100000000,fill=factor(Name))) + geom_bar(stat="summary")+theme_dark(
+  
+)+xlab('그룹')+ylab("평균연봉(억)")+scale_fill_brewer(name="연봉",palette ="Set3")
+```
+
+
+# 가설 6. 주루 능력과 연봉 간에 관계가 있을까?
+- 일반적인 타격 지표 외에, 이번엔 주루능력에 따른 연봉 차이도 확인해보았습니다.
+- 주루능력이 평균 이상인 선수들의 평균 연봉이 그렇지 않은 선수들보다 약 2억 정도 높은 것을 확인할 수 있었습니다.
+```{r}
+hitter_df2 %>% mutate(wSB_grp=ifelse(wSB>quantile(hitter_df2$wSB,0.5),'평균이상','평균이하')) %>% 
+    ggplot(aes(x=factor(wSB_grp),y=연봉,fill=factor(wSB_grp)))+geom_bar(stat = "summary", fun.y = "mean")+
+theme_bw(
+  
+)+xlab('주루능력')+scale_fill_discrete(name="주루능력")
+```
+
+# 가설7. 팀 성적에 따라 연봉이 달라질까?
+- 팀 마다 계약에 사용할 수 있는 총 연봉은 각기 다를 것이고, 이는 계약에 정말 중요한 요인입니다.
+- 이 총 연봉은 팀 등수와도 직접적인 영향이 있을 것이라고 생각했습니다.
+```{r}
+year_team_money=profile_df %>% group_by(GYEAR,T_ID) %>% na.omit() %>%  summarise(총연봉=sum(MONEY))
+
+ind_pit=개인투수_2016
+for (i in df_list[7:10]){
+    eval(parse(text=str_c('ind_pit=rbind(ind_pit,',i,')')))
+}
+
+
+win_df=team_hitter_df %>% inner_join(ind_pit %>% select(G_ID,T_ID,VS_T_ID,HEADER_NO,TB_SC,WLS)) %>% mutate(GYEAR=as.integer(substring(GDAY_DS,0,4))) %>% filter(WLS=='W') %>% group_by(GYEAR,T_ID) %>% summarise(WINS=n())
+
+a=win_df %>% group_by(GYEAR)  %>% summarise(rank=rank(WINS, ties.method = "first")) 
+
+win_df$rank=a$rank
+
+money_and_wins=win_df %>% inner_join(year_team_money) 
+```
+
+- 두 개의 팀으로만 확인하였을때, 팀 순위와 총 연봉간의 직접적인 상관관계는 확인할 수 없었습니다.
+- 하지만 이러한 Plot은 선수들이 구단과 연봉 협상을 할 때에 참고하기 좋은 plot이라고 생각하여, shiny에 추가하였습니다. 
+```{r}
+money_and_wins %>% filter(T_ID=='HH') %>% ggplot()+
+geom_bar(aes(x=GYEAR,y=총연봉/1000000000,fill=factor(GYEAR)),stat = 'identity')+
+theme_light()+
+scale_fill_brewer(palette = 'PuRd',name='년도')+
+geom_line(money_and_wins %>% filter(T_ID=='HH') ,mapping = aes(x=GYEAR,y=rank),color='white',size=1.5)+
+geom_line(money_and_wins %>% filter(T_ID=='HH') ,mapping = aes(x=GYEAR,y=rank),,color='purple',size=1)+
+scale_y_continuous(name='총연봉(십억)',sec.axis = sec_axis(~.*1,name='rank'))+
+xlab('년도')
+```
+
+
+```{r}
+money_and_wins %>% filter(T_ID=='LG') %>% ggplot()+
+geom_bar(aes(x=GYEAR,y=총연봉/1000000000,fill=factor(GYEAR)),stat = 'identity')+
+theme_light()+
+scale_fill_brewer(palette = 'PuRd',name='년도')+
+geom_line(money_and_wins %>% filter(T_ID=='LG') ,mapping = aes(x=GYEAR,y=rank),color='white',size=1.5)+
+geom_line(money_and_wins %>% filter(T_ID=='LG') ,mapping = aes(x=GYEAR,y=rank),,color='purple',size=1)+
+scale_y_continuous(name='총연봉(십억)',sec.axis = sec_axis(~.*1,name='rank'))+
+xlab('년도')
+```
+
+# 가설 8. 구원 투수인지, 선발 투수 인지에 따라 연봉에 차이가 있을까?
+- 이번엔 타자 외에도 투수 데이터도 살펴보았습니다.
+- 예상 처럼 구원 투수는 선발 투수에 비해 평균적인 연봉이 낮다는 것을 확인할 수 있었습니다.
+```{r}
+temp=pitcher_df %>% group_by(등록년도,선수코드) %>% summarise(구원평균=mean(구원),선발평균=mean(선발)) %>% mutate(구원여부=ifelse(구원평균>선발평균,1,0))
+profile_df %>% select(GYEAR,P_ID,MONEY) %>% rename('등록년도'='GYEAR','선수코드'='P_ID','연봉'='MONEY') %>% inner_join(temp) %>% group_by(구원여부)%>%
+na.omit() %>% summarise(연봉평균=mean(연봉)) %>% ggplot()+geom_bar(aes(x=factor(구원여부),y=연봉평균/100000000,fill=factor(구원여부)),stat='identity')+
+theme_bw( 
+)+xlab('구원여부')+ylab('연봉평균(억)')+
+scale_fill_brewer(palette = 'Greens',name="구원여부")
+```
+
+# 가설9. "홀드(중간계투의 세이브)"에 따라 연봉 차이가 있을까?
+- 홀드는 중간 계투의 세이브라고 불리는 지표로써, 홀드를 많이 해낼 수록 좋은 투수라고 할 수 있습니다.
+- 이러한 지표가 연봉 협상에 제대로 반영 되고 있는지 확인하기 위해, 평균적인 홀드와 연봉 간의 관계를 확인하였습니다.
+- 확인 결과 뚜렷한 선형관계가 확인되지 않았으며, 투수 협상에 있어서 제대로 참고 되지 않는 지표라고 할 수 있기에, 이러한 변수도 고려한 연봉 협상을 제안할 수 있을 것입니다.
+```{r}
+temp=pitcher_df %>% group_by(등록년도,선수코드) %>% summarise(홀드평균=mean(홀드))
+profile_df %>% select(GYEAR,P_ID,MONEY) %>% rename('등록년도'='GYEAR','선수코드'='P_ID','연봉'='MONEY') %>% inner_join(temp) %>%
+na.omit() %>% filter(홀드평균!=0) %>% ggplot(aes(x=홀드평균,y=연봉,color=홀드평균))+
+geom_jitter()+geom_smooth(metohd=lm,se=FALSE,color='red')+theme_classic()
+
+```
+
+# 향후 발전 방향
+- 시각화 보고서이기에, 모델링은 하지 않았으나, 생각하는 향후 발전 방향을 기술하고자 합니다.
+- 앞서 확인했던 것처럼, 월요일 및 7월과 8월의 경기 데이터를 제거합니다. 또한 앞서 추가했던 각종 세이버 메트릭스 지표와, 경기 데이터를 사용하여, 연봉을 타깃 변수로하여 다중 회귀를 적합합니다.
+- 이후 유의한 변수들로만 다시 다중 회귀를 적합한 후, standardized regression coefficient를 구하여, 전체 coefficient의 합을 분모로, 해당 변수의 coefficient를 분자로 하는 가중치를 구합니다.
+- 즉, 연봉에 영향을 미치는 변수들의 가중합으로 "연봉 지수"를 생성합니다.
+- 이 간단한 모델을 예로 들면, 안타, 이루타, wRAA 등 연봉에 영향을 미치는 변수들의 가중 합으로 "연봉 지수"를 만들어, 선수들로 하여금 성적을 통해 자신의 적정 연봉을 알 수 있게 할 수 있을 것입니다.
+```{r}
+hitter_df=hitter_df %>% mutate(month=month(ymd(게임날짜),label=TRUE),weekday=wday(ymd(게임날짜),label=TRUE))
+
+hitter_df=hitter_df %>% filter(weekday!='월') 
+
+pop=hitter_df %>% filter((month==7)|(month==8))
+
+pop=hitter_df %>% select(선수코드,names(which(sapply(hitter_df, is.numeric)))) %>% select(-c(게임날짜,등록년도)) %>% 
+group_by(선수코드) %>% na.omit() %>% summarise_all(mean)
+
+names(pop)
+pop=pop %>% mutate(wOBA=(0.69*볼넷+0.72*사구+0.89*안타+1.27*이루타+1.62*삼루타+2.10*홈런)/(타수+볼넷+고의4구+희비)) %>% mutate(wOBA= ifelse(is.na(wOBA),0,wOBA))
+
+league_wOBA_mean=pop %>% na.omit() %>% summarise(mean(wOBA))
+
+wOBA_scale=.320
+
+league_wOBA_mean=league_wOBA_mean[[1]]
+pop=pop %>% mutate( wRAA=타수*((wOBA-league_wOBA_mean)/.320))
+temp=pop %>% summarise(mean(도루실패))
+mean_SB=temp[[1]]
+mean_wSB=pop %>% mutate(wSB =0.2*도루 - 0.4*도루실패) %>% summarise(mean(wSB))
+mean_wSB=mean_wSB[[1]]
+pop=pop %>% mutate(wSB =0.2*도루 - 0.4*도루실패-mean_wSB)
+profile_df2=profile_df %>% group_by(P_ID) %>% summarise(포지션=first(POSITION))
+pop=inner_join(pop,profile_df2  %>% rename('선수코드'='P_ID'))
+pop$포지션 %>% unique()
+position_scale=function(x){ #포수에 가중치 주기위한 함수
+    if(x=='내'){
+        a=0.2
+    }else{
+        if(x=='포'){
+            a=1
+        }else{
+            a=0
+        }
+    }
+    return(a)
+}
+pop$포지션가중치=pop$포지션 %>% sapply(position_scale)
+pop=pop %>% mutate(연봉=연봉/100000000)
+
+pop=pop %>% select(-포지션)
+
+pop=pop %>% na.omit()
+
+fit=lm(data=pop[3:35],연봉~.)
+
+summary(fit)
+```
+
